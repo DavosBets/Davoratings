@@ -366,8 +366,11 @@ function viewSettings(m){
   var ta=h('textarea',{id:'bk',placeholder:'Tap Export, copy the text somewhere safe (Notes). To restore, paste it here and tap Import.'});
   d.appendChild(ta);
   d.appendChild(h('div',{class:'btns'},[
-    h('button',{class:'btn alt',onclick:function(){ ta.value=JSON.stringify(S); ta.select(); try{ document.execCommand('copy'); }catch(e){} }},['Export (copies)']),
-    h('button',{class:'btn alt',onclick:function(){ try{ var o=JSON.parse(ta.value); if(!o.races||o.races.length!==NR) throw 0; S=o; S.settings=Object.assign(defState().settings,S.settings); save(); go('sum'); }catch(e){ alert('That text is not a valid backup.'); } }},['Import']),
+    h('button',{class:'btn alt',onclick:function(){ ta.value=JSON.stringify(S); ta.select(); try{ document.execCommand('copy'); }catch(e){} }},['Export all (copies)']),
+    h('button',{class:'btn alt',onclick:function(){ var o={type:'ratings',meeting:S.meeting,races:S.races.map(function(r){ return {title:r.title,runners:r.runners.map(function(x){ return {tab:x.tab,name:x.name,rating:x.rating}; })}; })}; ta.value=JSON.stringify(o); ta.select(); try{ document.execCommand('copy'); }catch(e){} }},['Export ratings only']),
+    h('button',{class:'btn alt',onclick:function(){ try{ var o=JSON.parse(ta.value); if(!o.races||o.races.length!==NR) throw 0;
+      if(o.type==='ratings'){ if(!confirm('Load these ratings? This replaces the meeting and all races here. Your account and settings are kept.')) return; S.meeting=o.meeting||{track:'',date:''}; S.races=o.races.map(function(r){ return {title:r.title||'',mode:'INTERIM',runners:(r.runners||[]).slice(0,MAXRUN).map(function(x){ return {tab:x.tab,name:x.name,rating:x.rating==null?'':String(x.rating),bsp:'',won:false}; })}; }); save(); go('sum'); return; }
+      S=o; S.settings=Object.assign(defState().settings,S.settings); save(); go('sum'); }catch(e){ alert('That text is not a valid backup.'); } }},['Import']),
     h('button',{class:'btn red',onclick:function(){ if(confirm('Erase everything stored in this app?')){ S=defState(); try{localStorage.removeItem(KEY);}catch(e){} go('set'); } }},['Erase all'])
   ]));
   m.appendChild(d);
