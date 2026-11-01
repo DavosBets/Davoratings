@@ -94,7 +94,7 @@ function defState(){
   return {meeting:{track:'',date:''},
     settings:{market:80,account:1000,div:30,sd:6,comm:8,
       csvUrl:'https://promo.betfair.com/betfairsp/prices/dwbfpricesausthrwin{DD}{MM}{YYYY}.csv',
-      proxy:'',autoFinal:true},
+      proxy:'',top:'ALL',autoFinal:true},
     races:blankRaces()};
 }
 var S = defState(), view = 'sum';
@@ -153,6 +153,15 @@ function calc(race){
 }
 function allCalc(){ return S.races.map(function(r){ return r.runners.length?calc(r):{rows:[],outlay:0,ret:0,comm:0,profit:0,nb:0}; }); }
 
+var showAll=false;
+function topN(){ var t=S.settings.top; return (t==='ALL'||!(t>=1))?0:parseInt(t,10); }
+function visSet(race,c){
+  var N=topN(); if(!N||showAll) return null;
+  var idx=[]; c.rows.forEach(function(o,i){ if(o.price!=null) idx.push(i); });
+  idx.sort(function(a,b){ return c.rows[b].p-c.rows[a].p; });
+  var set={}; idx.slice(0,N).forEach(function(i){ set[i]=true; });
+  return {set:set,priced:idx.length,N:N};
+}
 /* ============ helpers ============ */
 function $(s,el){ return (el||document).querySelector(s); }
 function h(tag,attrs,kids){ var e=document.createElement(tag); if(attrs) for(var k in attrs){ if(k==='class') e.className=attrs[k]; else if(k==='html') e.innerHTML=attrs[k]; else if(k.slice(0,2)==='on') e[k]=attrs[k]; else e.setAttribute(k,attrs[k]); } (kids||[]).forEach(function(c){ if(c==null) return; e.appendChild(typeof c==='string'?document.createTextNode(c):c); }); return e; }
@@ -171,7 +180,7 @@ function renderNav(){
   $('#hTitle').textContent = (S.meeting.track||'Davo Ratings');
   $('#hSub').textContent = S.meeting.date||'';
 }
-function go(v){ view=v; render(); window.scrollTo(0,0); }
+function go(v){ if(v!==view) showAll=false; view=v; render(); window.scrollTo(0,0); }
 function render(){
   renderNav();
   var m=$('#main'); m.innerHTML=''; $('#tot').classList.add('hide');
@@ -250,7 +259,16 @@ function viewRace(m,idx){
 
   if(!race.runners.length){ m.appendChild(h('div',{class:'card note'},['No runners yet. Use Paste field or + Runner.'])); return; }
 
+  var vs=visSet(race,calc(race)), hidden=0;
+  if(vs&&vs.priced>vs.N){
+    var nb=h('div',{class:'card note'},['Showing the top '+vs.N+' of '+vs.priced+' rated runners (change in Settings). ']);
+    var sb=h('button',{class:'btn alt',style:'margin-left:6px;padding:6px 10px;font-size:13px'},['Show all']); sb.onclick=function(){ showAll=true; render(); }; nb.appendChild(sb); m.appendChild(nb);
+  } else if(showAll&&topN()){
+    var nb2=h('div',{class:'card note'},['Showing all runners. ']);
+    var sb2=h('button',{class:'btn alt',style:'margin-left:6px;padding:6px 10px;font-size:13px'},['Show top '+topN()]); sb2.onclick=function(){ showAll=false; render(); }; nb2.appendChild(sb2); m.appendChild(nb2);
+  }
   race.runners.forEach(function(r,i){
+    if(vs){ var cr=calc(race).rows[i]; var show = vs.set[i] || (cr.price==null && !isScr(r)); if(!show){ hidden++; return; } }
     var row=h('div',{class:'rn',id:'rn'+i});
     var tabI=h('input',{class:'tab',value:r.tab,inputmode:'numeric'}); tabI.oninput=function(){ var v=parseInt(tabI.value,10); if(v>0) r.tab=v; save(); };
     var nmI=h('input',{class:'nm',value:r.name}); nmI.oninput=function(){ r.name=nmI.value.toUpperCase(); save(); };
@@ -259,7 +277,7 @@ function viewRace(m,idx){
     row.appendChild(h('div',{class:'top'},[tabI,nmI,pr,xb]));
     var rI=h('input',{value:r.rating,inputmode:'decimal',placeholder:'rating / scr'}); rI.oninput=function(){ r.rating=rI.value; save(); upd(idx); };
     var bI=h('input',{value:r.bsp,inputmode:'decimal',placeholder:'BSP'}); bI.oninput=function(){ r.bsp=bI.value; save(); upd(idx); };
-    var wb=h('button',{class:'won'+(r.won?' on':'')},['WON']); wb.onclick=function(){ var was=r.won; race.runners.forEach(function(x){x.won=false;}); r.won=!was; save(); $('#main').querySelectorAll('.won').forEach(function(b,k){ b.className='won'+(race.runners[k].won?' on':''); }); upd(idx); };
+    var wb=h('button',{class:'won'+(r.won?' on':'')},['WON']); wb._r=r; wb.onclick=function(){ var was=r.won; race.runners.forEach(function(x){x.won=false;}); r.won=!was; save(); $('#main').querySelectorAll('.won').forEach(function(b){ b.className='won'+(b._r.won?' on':''); }); upd(idx); };
     var l1=h('label',{},['Rating']); l1.appendChild(rI); var l2=h('label',{},['Betfair SP']); l2.appendChild(bI);
     row.appendChild(h('div',{class:'ins'},[l1,l2,wb]));
     row.appendChild(h('div',{class:'bet',id:'bt'+i}));
@@ -299,12 +317,14 @@ function viewBets(m){
     r.runners.forEach(function(x,k){ var o=c.rows[k]; if(o.price!=null&&o.price<=100) rows.push({x:x,o:o}); });
     if(!rows.length) return; any=true;
     rows.sort(function(a,b){return a.o.price-b.o.price;});
+    var hid=0, NN=topN(); if(NN&&rows.length>NN){ hid=rows.length-NN; rows=rows.slice(0,NN); }
     var card=h('div',{class:'card'}); card.appendChild(h('h2',{},['Race '+(i+1)+(r.title?'  \u00b7  '+r.title:'')]));
     card.onclick=function(){ go('r'+i); };
     rows.forEach(function(p){
       var st=''; if(r.mode==='FINAL'&&isFinite(num(p.x.bsp))) st=p.o.qual?'  \u2713':'  \u2717';
       card.appendChild(h('div',{class:'bl'},[h('span',{},[p.x.tab+'. '+p.x.name]),h('span',{},['min '+p.o.price.toFixed(1)+'  \u00b7  ']),h('span',{class:'s'},[money(p.o.stake)+st])]));
     });
+    if(hid) card.appendChild(h('div',{class:'note',style:'margin-top:6px'},['+ '+hid+' more bet(s) not shown (Main chances setting)']));
     m.appendChild(card);
   });
   if(!any) m.appendChild(h('div',{class:'card note'},['Enter ratings in the race tabs and bets will list here.']));
@@ -330,6 +350,7 @@ function viewSettings(m){
   a.appendChild(field('Account \u00f7 (unit)',S.settings.div,function(v){ var x=num(v); if(x>0){S.settings.div=x;save();} },true));
   a.appendChild(field('Rating st. dev.',S.settings.sd,function(v){ var x=num(v); if(x>0){S.settings.sd=x;save();} },true));
   a.appendChild(field('Commission %',S.settings.comm,function(v){ var x=num(v); if(x>=0){S.settings.comm=x;save();} },true));
+  a.appendChild(field('Main chances shown (number or ALL)',S.settings.top,function(v){ v=v.trim(); if(v===''||/^a/i.test(v)){ S.settings.top='ALL'; save(); return; } var x=parseInt(v,10); if(x>=1){ S.settings.top=x; save(); } }));
   p.appendChild(a);
   p.appendChild(h('div',{class:'note'},['Unit (MIN TARGET) = account \u00f7 '+'divisor. Stake = unit \u00f7 Davo price.']));
   m.appendChild(p);
