@@ -53,6 +53,8 @@ textarea{min-height:110px;font-size:13px;font-family:ui-monospace,Menlo,monospac
 .rn{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:9px 10px;margin-bottom:8px}
 .rn.hasbet{background:var(--bet);border-color:var(--good)}
 .rn.scr{opacity:.55}
+.rn.scr .bspl,.rn.scr .won,.rn.scr .bet{display:none}
+.rn.scr .ins{grid-template-columns:1fr 70px}
 .rn .top{display:flex;align-items:center;gap:8px}
 .rn .tab{width:30px;text-align:center;font-weight:800;font-size:16px;color:var(--mute);flex:0 0 30px;padding:4px 0;border:0;background:transparent}
 .rn .nm{flex:1;font-weight:650;border:0;background:transparent;padding:4px 2px;font-size:15px;text-transform:uppercase;min-width:0}
@@ -76,6 +78,9 @@ textarea{min-height:110px;font-size:13px;font-family:ui-monospace,Menlo,monospac
 .bl:first-of-type{border-top:0}
 .bl .s{font-weight:750}
 .hide{display:none}
+.ov{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:50;display:flex;align-items:center;justify-content:center;padding:20px}
+.ov .bx{background:var(--card);color:var(--ink);border-radius:14px;padding:16px;max-width:420px;width:100%}
+.ov .bx p{margin:0 0 12px;white-space:pre-wrap}
 </style>
 </head>
 <body>
@@ -95,14 +100,15 @@ function blankRaces(){ var a=[]; for(var i=0;i<NR;i++) a.push({title:'',mode:'IN
 function defState(){
   return {meeting:{track:'',date:''},
     settings:{market:80,account:1000,div:30,sd:6,comm:8,
-      csvUrl:'https://promo.betfair.com/betfairsp/prices/dwbfpricesausthrwin{DD}{MM}{YYYY}.csv',
-      proxy:'',top:'ALL',autoFinal:true},
+      csvUrl:'https://promo.betfair.com/betfairsp/prices/dwbfpricesauswin{DD}{MM}{YYYY}.csv',
+      fileOffset:1,
+      proxy:'',top:'ALL',ticks:true,minBet:1,autoFinal:true},
     races:blankRaces()};
 }
 var S = defState(), view = 'sum';
 
 function load(){
-  try{ var t=localStorage.getItem(KEY); if(t){ var o=JSON.parse(t); if(o&&o.races&&o.races.length===NR){ S=o; S.settings=Object.assign(defState().settings,S.settings); return true; } } }catch(e){}
+  try{ var t=localStorage.getItem(KEY); if(t){ var o=JSON.parse(t); if(o&&o.races&&o.races.length===NR){ S=o; S.settings=Object.assign(defState().settings,S.settings); if(/dwbfpricesausthrwin/.test(S.settings.csvUrl)) S.settings.csvUrl=S.settings.csvUrl.replace('dwbfpricesausthrwin','dwbfpricesauswin'); return true; } } }catch(e){}
   return false;
 }
 var saveT=null;
@@ -124,6 +130,21 @@ function num(x){ var v=parseFloat(String(x==null?'':x).trim()); return isFinite(
 function round(x,d){ var m=Math.pow(10,d); return Math.round((x+1e-12)*m)/m; }
 function unit(){ return round(S.settings.account/S.settings.div,2); }
 
+var TICKS=[[1.01,2,0.01],[2,3,0.02],[3,4,0.05],[4,6,0.1],[6,10,0.2],[10,20,0.5],[20,30,1],[30,50,2],[50,100,5],[100,1000,10]];
+function tickUp(p){ // lowest Betfair price on the ladder that is >= p
+  if(p<=1.01) return 1.01; if(p>=1000) return 1000;
+  for(var i=0;i<TICKS.length;i++){ var b=TICKS[i]; if(p<b[1]-1e-9||i===TICKS.length-1){
+      var k=Math.ceil((p-b[0])/b[2]-1e-7), v=b[0]+k*b[2];
+      return Math.round(v*100)/100; } }
+  return p;
+}
+function fmtP(p){ return p<4?p.toFixed(2):(p<20?p.toFixed(1):p.toFixed(0)); }
+function tickNear(p){
+  var up=tickUp(p); if(up===p||p<=1.01||p>=1000) return up;
+  var step=10; for(var i=0;i<TICKS.length;i++){ if(up>TICKS[i][0]+1e-9 && up<=TICKS[i][1]+1e-9){ step=TICKS[i][2]; break; } }
+  var lo=Math.round((up-step)*100)/100;
+  return (p-lo < up-p-1e-9) ? lo : up;
+}
 function calc(race){
   var n=race.runners.length, sd=S.settings.sd, mk=S.settings.market/100, T=unit();
   var m=[]; for(var i=0;i<MAXRUN;i++) m.push(i<n?ratingVal(race.runners[i]):0);
@@ -140,11 +161,13 @@ function calc(race){
   var out=[], outlay=0, ret=0, nb=0;
   for(var q=0;q<n;q++){
     var r=race.runners[q], o={p:P[q]/sum,price:null,stake:0,ret:0,qual:false};
-    if(m[q]>0){ o.price = P[q]<0.002 ? 1000 : round(sum/(mk*P[q]),1); }
+    if(m[q]>0){ o.price = P[q]<0.002 ? 1000 : round(sum/(mk*P[q]),1); if(S.settings.ticks!==false && o.price<1000) o.price=tickNear(o.price); }
     if(o.price!==null && o.price<=100){
       o.stake=round(T/o.price,2);
-      var b=num(r.bsp); o.qual = isFinite(b) && b>=o.price;
-      if(race.mode==='INTERIM'){ o.bet=true; } else { o.bet=o.qual; }
+      var mb=S.settings.minBet>0?S.settings.minBet:0;
+      if(mb && o.stake<mb){ if(o.stake>=mb/2-1e-9) o.stake=mb; else { o.stake=0; o.skip=true; } }
+      var b=num(r.bsp); o.qual = !o.skip && isFinite(b) && b>=o.price;
+      if(race.mode==='INTERIM'){ o.bet=!o.skip; } else { o.bet=o.qual; }
       if(race.mode==='FINAL' && o.qual){ outlay+=o.stake; nb++; if(r.won) { o.ret=o.stake*b; ret+=o.ret; } }
     }
     out.push(o);
@@ -171,6 +194,16 @@ function money(x,sign){ if(x==null||isNaN(x)) return '-'; var s=Math.abs(x).toFi
 function esc(s){ return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
 function cls(x){ return x>0?'pos':(x<0?'neg':''); }
 
+/* in-page dialogs (browser pop-ups are blocked in some viewers) */
+function ask(msg,yes,opts){
+  var ov=h('div',{class:'ov'}), bx=h('div',{class:'bx'}); ov.appendChild(bx); bx.appendChild(h('p',{},[msg]));
+  var inp=null; if(opts&&opts.input){ inp=h('input',{type:'text'}); bx.appendChild(inp); }
+  var bt=h('div',{class:'btns'}); 
+  var no=h('button',{class:'btn alt'},[opts&&opts.say?'OK':'Cancel']); no.onclick=function(){ document.body.removeChild(ov); };
+  if(!(opts&&opts.say)){ var ok=h('button',{class:'btn'},['OK']); ok.onclick=function(){ var v=inp?inp.value:true; document.body.removeChild(ov); yes(v); }; bt.appendChild(ok); }
+  bt.appendChild(no); bx.appendChild(bt); document.body.appendChild(ov); if(inp) inp.focus();
+}
+function say(msg){ ask(msg,null,{say:true}); }
 /* ============ navigation ============ */
 function renderNav(){
   var nav=$('#nav'); nav.innerHTML='';
@@ -243,17 +276,17 @@ function viewRace(m,idx){
   top.appendChild(seg);
   top.appendChild(h('div',{class:'note',style:'margin-top:6px'},['INTERIM shows stakes for every runner priced under $100. FINAL only counts bets where the BSP is at or above your price, and adds them to the totals.']));
   var bt=h('div',{class:'btns'});
-  bt.appendChild(h('button',{class:'btn alt',onclick:function(){ var t=prompt('Runner name (tab number is next free)'); if(t){ if(race.runners.length>=MAXRUN){alert('Max 24 runners');return;} var n=race.runners.reduce(function(a,r){return Math.max(a,r.tab);},0)+1; race.runners.push({tab:n,name:t.toUpperCase(),rating:'',bsp:'',won:false}); save(); render(); } }},['+ Runner']));
+  bt.appendChild(h('button',{class:'btn alt',onclick:function(){ ask('Runner name (tab number is next free)',function(t){ if(typeof t==='string'&&t.trim()){ if(race.runners.length>=MAXRUN){say('Max 24 runners');return;} var n=race.runners.reduce(function(a,r){return Math.max(a,r.tab);},0)+1; race.runners.push({tab:n,name:t.trim().toUpperCase(),rating:'',bsp:'',won:false}); save(); render(); } },{input:true}); }},['+ Runner']));
   bt.appendChild(h('button',{class:'btn alt',onclick:function(){ var p=$('#paste'); p.classList.toggle('hide'); }},['Paste field']));
-  bt.appendChild(h('button',{class:'btn alt',onclick:function(){ if(confirm('Clear BSPs and winner for race '+(idx+1)+'?')){ race.runners.forEach(function(r){r.bsp='';r.won=false;}); save(); render(); } }},['Clear BSP/result']));
-  bt.appendChild(h('button',{class:'btn alt',onclick:function(){ if(confirm('Remove ALL runners from race '+(idx+1)+'?')){ race.runners=[]; race.mode='INTERIM'; save(); render(); } }},['Clear race']));
+  bt.appendChild(h('button',{class:'btn alt',onclick:function(){ ask('Clear BSPs and winner for race '+(idx+1)+'?',function(){ race.runners.forEach(function(r){r.bsp='';r.won=false;}); save(); render(); }); }},['Clear BSP/result']));
+  bt.appendChild(h('button',{class:'btn alt',onclick:function(){ ask('Remove ALL runners from race '+(idx+1)+'?',function(){ race.runners=[]; race.mode='INTERIM'; save(); render(); }); }},['Clear race']));
   top.appendChild(bt);
   var paste=h('div',{id:'paste',class:'hide',style:'margin-top:10px'});
   paste.appendChild(h('textarea',{id:'pasteTa',placeholder:'One runner per line, e.g.\n1 Horse One\n2. Horse Two\n3\tHorse Three\n(replaces current runners; ratings can be added after)'}));
   paste.appendChild(h('div',{class:'btns'},[h('button',{class:'btn',onclick:function(){
     var lines=$('#pasteTa').value.split(/\n+/), rs=[];
     lines.forEach(function(l){ var mm=l.trim().match(/^[E]?(\d+)[\.\)\s\t-]+(.+)$/i); if(mm) rs.push({tab:parseInt(mm[1],10),name:mm[2].replace(/\s+\(?\d+(\.\d+)?kg.*$/i,'').trim().toUpperCase(),rating:'',bsp:'',won:false}); });
-    if(!rs.length){ alert('No lines recognised. Use: number then name.'); return; }
+    if(!rs.length){ say('No lines recognised. Use: number then name.'); return; }
     race.runners=rs.slice(0,MAXRUN); save(); render();
   }},['Load runners'])]));
   top.appendChild(paste);
@@ -275,7 +308,7 @@ function viewRace(m,idx){
     var tabI=h('input',{class:'tab',value:r.tab,inputmode:'numeric'}); tabI.oninput=function(){ var v=parseInt(tabI.value,10); if(v>0) r.tab=v; save(); };
     var nmI=h('input',{class:'nm',value:r.name}); nmI.oninput=function(){ r.name=nmI.value.toUpperCase(); save(); };
     var pr=h('div',{class:'pr',id:'pr'+i}); 
-    var xb=h('button',{class:'x'},['\u00d7']); xb.onclick=function(){ if(confirm('Remove '+r.name+'?')){ race.runners.splice(i,1); save(); render(); } };
+    var xb=h('button',{class:'x'},['\u00d7']); xb.onclick=function(){ ask('Remove '+r.name+'?',function(){ race.runners.splice(i,1); save(); render(); }); };
     row.appendChild(h('div',{class:'top'},[tabI,nmI,pr,xb]));
     var rI=h('input',{value:r.rating,inputmode:'decimal',placeholder:'rating / scr'}); rI.oninput=function(){ r.rating=rI.value; save(); upd(idx); };
     var bI=h('input',{value:r.bsp,inputmode:'decimal',placeholder:'BSP'}); bI.oninput=function(){ r.bsp=bI.value; save(); upd(idx); };
@@ -283,7 +316,7 @@ function viewRace(m,idx){
     var sb=h('button',{class:'scrb'+(isScr(r)?' on':'')},['SCR']);
     sb.onclick=function(){ if(isScr(r)){ r.rating=r.prev||''; } else { r.prev=r.rating; r.rating='scr'; if(r.won) r.won=false; } rI.value=r.rating; sb.className='scrb'+(isScr(r)?' on':''); save(); upd(idx); };
     rI.addEventListener('input',function(){ sb.className='scrb'+(isScr(r)?' on':''); });
-    var l1=h('label',{},['Rating']); l1.appendChild(rI); var l2=h('label',{},['Betfair SP']); l2.appendChild(bI);
+    var l1=h('label',{},['Rating']); l1.appendChild(rI); var l2=h('label',{class:'bspl'},['Betfair SP']); l2.appendChild(bI);
     row.appendChild(h('div',{class:'ins'},[l1,l2,sb,wb]));
     row.appendChild(h('div',{class:'bet',id:'bt'+i}));
     m.appendChild(row);
@@ -297,13 +330,14 @@ function upd(idx){
     var o=c.rows[i], row=$('#rn'+i); if(!row) return;
     var pr=$('#pr'+i), bt=$('#bt'+i);
     row.classList.toggle('scr',isScr(r)); 
-    pr.innerHTML = o.price==null ? '' : (o.price>=1000?'<span style="color:var(--mute)">1000</span>':o.price.toFixed(1))+'<small>DAVO</small>';
+    pr.innerHTML = o.price==null ? '' : (o.price>=1000?'<span style="color:var(--mute)">1000</span>':fmtP(o.price))+'<small>DAVO</small>';
     var txt='', has=false;
     if(o.price!=null && o.price<=100){
-      if(race.mode==='INTERIM'){ has=true; txt='Bet '+money(o.stake)+' at min odds '+o.price.toFixed(1); }
+      if(o.skip){ txt='No bet: stake under '+money(S.settings.minBet/2); }
+      else if(race.mode==='INTERIM'){ has=true; txt='Bet '+money(o.stake)+' at min odds '+fmtP(o.price); }
       else if(isFinite(num(r.bsp))){
         if(o.qual){ has=true; txt='Bet '+money(o.stake)+' @ '+num(r.bsp)+(r.won?'  \u2192  returns '+money(o.ret):'  \u2192  lost'); }
-        else txt='No bet: BSP '+num(r.bsp)+' below '+o.price.toFixed(1);
+        else txt='No bet: BSP '+num(r.bsp)+' below '+fmtP(o.price);
       } else txt='Waiting for BSP (stake would be '+money(o.stake)+')';
     }
     row.classList.toggle('hasbet',has); bt.textContent=txt;
@@ -319,7 +353,7 @@ function viewBets(m){
   var any=false;
   S.races.forEach(function(r,i){
     if(!r.runners.length) return; var c=calc(r), rows=[];
-    r.runners.forEach(function(x,k){ var o=c.rows[k]; if(o.price!=null&&o.price<=100) rows.push({x:x,o:o}); });
+    r.runners.forEach(function(x,k){ var o=c.rows[k]; if(o.price!=null&&o.price<=100&&!o.skip) rows.push({x:x,o:o}); });
     if(!rows.length) return; any=true;
     rows.sort(function(a,b){return a.o.price-b.o.price;});
     var hid=0, NN=topN(); if(NN&&rows.length>NN){ hid=rows.length-NN; rows=rows.slice(0,NN); }
@@ -327,7 +361,7 @@ function viewBets(m){
     card.onclick=function(){ go('r'+i); };
     rows.forEach(function(p){
       var st=''; if(r.mode==='FINAL'&&isFinite(num(p.x.bsp))) st=p.o.qual?'  \u2713':'  \u2717';
-      card.appendChild(h('div',{class:'bl'},[h('span',{},[p.x.tab+'. '+p.x.name]),h('span',{},['min '+p.o.price.toFixed(1)+'  \u00b7  ']),h('span',{class:'s'},[money(p.o.stake)+st])]));
+      card.appendChild(h('div',{class:'bl'},[h('span',{},[p.x.tab+'. '+p.x.name]),h('span',{},['min '+fmtP(p.o.price)+'  \u00b7  ']),h('span',{class:'s'},[money(p.o.stake)+st])]));
     });
     if(hid) card.appendChild(h('div',{class:'note',style:'margin-top:6px'},['+ '+hid+' more bet(s) not shown (Main chances setting)']));
     m.appendChild(card);
@@ -344,7 +378,7 @@ function viewSettings(m){
   var dl=h('label',{class:'f'},['Date']); dl.appendChild(di); r.appendChild(dl);
   c.appendChild(r);
   c.appendChild(h('div',{class:'btns'},[
-    h('button',{class:'btn',onclick:function(){ if(confirm('Start a new meeting? This clears all races (settings are kept). Copy a backup first if you want to keep this one.')){ S.races=blankRaces(); S.meeting={track:S.meeting.track,date:''}; save(); go('set'); } }},['New meeting'])
+    h('button',{class:'btn',onclick:function(){ ask('Start a new meeting? This clears all races (settings are kept). Copy a backup first if you want to keep this one.',function(){ S.races=blankRaces(); S.meeting={track:S.meeting.track,date:''}; save(); go('set'); }); }},['New meeting'])
   ]));
   m.appendChild(c);
 
@@ -356,12 +390,16 @@ function viewSettings(m){
   a.appendChild(field('Rating st. dev.',S.settings.sd,function(v){ var x=num(v); if(x>0){S.settings.sd=x;save();} },true));
   a.appendChild(field('Commission %',S.settings.comm,function(v){ var x=num(v); if(x>=0){S.settings.comm=x;save();} },true));
   a.appendChild(field('Main chances shown (number or ALL)',S.settings.top,function(v){ v=v.trim(); if(v===''||/^a/i.test(v)){ S.settings.top='ALL'; save(); return; } var x=parseInt(v,10); if(x>=1){ S.settings.top=x; save(); } }));
+  a.appendChild(field('Minimum bet $ (stakes from half this are raised to it; lower ones skipped)',S.settings.minBet,function(v){ var x=num(v); if(x>=0){S.settings.minBet=x;save();} },true));
   p.appendChild(a);
+  var tk=h('label',{class:'f',style:'margin-top:4px'}); var tc=h('input',{type:'checkbox',style:'width:auto;margin-right:8px'}); tc.checked=S.settings.ticks!==false; tc.onchange=function(){ S.settings.ticks=tc.checked; save(); };
+  tk.appendChild(tc); tk.appendChild(document.createTextNode('Round Davo prices to the nearest Betfair price step (stake is worked out from the rounded price)')); p.appendChild(tk);
   p.appendChild(h('div',{class:'note'},['Unit (MIN TARGET) = account \u00f7 '+'divisor. Stake = unit \u00f7 Davo price.']));
   m.appendChild(p);
 
   var b=h('div',{class:'card'}); b.appendChild(h('h2',{},['Betfair SP download']));
-  b.appendChild(field('CSV address ({DD} {MM} {YYYY} are filled from the meeting date)',S.settings.csvUrl,function(v){ S.settings.csvUrl=v.trim(); save(); }));
+  b.appendChild(field('File date offset (days after the meeting date; Betfair dates its files by UK time)',S.settings.fileOffset,function(v){ var x=parseInt(v,10); if(isFinite(x)&&x>=-3&&x<=3){ S.settings.fileOffset=x; save(); } },true));
+  b.appendChild(field('CSV address ({DD} {MM} {YYYY} are filled from the meeting date plus the offset)',S.settings.csvUrl,function(v){ S.settings.csvUrl=v.trim(); save(); }));
   b.appendChild(field('Proxy template (optional, use {URL}), only needed if the browser blocks the download',S.settings.proxy,function(v){ S.settings.proxy=v.trim(); save(); }));
   var cb=h('label',{class:'f'}); var ck=h('input',{type:'checkbox',style:'width:auto;margin-right:8px'}); ck.checked=!!S.settings.autoFinal; ck.onchange=function(){ S.settings.autoFinal=ck.checked; save(); };
   cb.appendChild(ck); cb.appendChild(document.createTextNode('Switch a race to FINAL once its winner is loaded')); b.appendChild(cb);
@@ -374,9 +412,9 @@ function viewSettings(m){
     h('button',{class:'btn alt',onclick:function(){ ta.value=JSON.stringify(S); ta.select(); try{ document.execCommand('copy'); }catch(e){} }},['Export all (copies)']),
     h('button',{class:'btn alt',onclick:function(){ var o={type:'ratings',meeting:S.meeting,races:S.races.map(function(r){ return {title:r.title,runners:r.runners.map(function(x){ return {tab:x.tab,name:x.name,rating:x.rating}; })}; })}; ta.value=JSON.stringify(o); ta.select(); try{ document.execCommand('copy'); }catch(e){} }},['Export ratings only']),
     h('button',{class:'btn alt',onclick:function(){ try{ var o=JSON.parse(ta.value); if(!o.races||o.races.length!==NR) throw 0;
-      if(o.type==='ratings'){ if(!confirm('Load these ratings? This replaces the meeting and all races here. Your account and settings are kept.')) return; S.meeting=o.meeting||{track:'',date:''}; S.races=o.races.map(function(r){ return {title:r.title||'',mode:'INTERIM',runners:(r.runners||[]).slice(0,MAXRUN).map(function(x){ return {tab:x.tab,name:x.name,rating:x.rating==null?'':String(x.rating),bsp:'',won:false}; })}; }); save(); go('sum'); return; }
-      S=o; S.settings=Object.assign(defState().settings,S.settings); save(); go('sum'); }catch(e){ alert('That text is not a valid backup.'); } }},['Import']),
-    h('button',{class:'btn red',onclick:function(){ if(confirm('Erase everything stored in this app?')){ S=defState(); try{localStorage.removeItem(KEY);}catch(e){} go('set'); } }},['Erase all'])
+      if(o.type==='ratings'){ ask('Load these ratings? This replaces the meeting and all races here. Your account and settings are kept.',function(){ S.meeting=o.meeting||{track:'',date:''}; S.races=o.races.map(function(r){ return {title:r.title||'',mode:'INTERIM',runners:(r.runners||[]).slice(0,MAXRUN).map(function(x){ return {tab:x.tab,name:x.name,rating:x.rating==null?'':String(x.rating),bsp:'',won:false}; })}; }); save(); go('sum'); }); return; }
+      S=o; S.settings=Object.assign(defState().settings,S.settings); save(); go('sum'); }catch(e){ say('That text is not a valid backup.'); } }},['Import']),
+    h('button',{class:'btn red',onclick:function(){ ask('Erase everything stored in this app?',function(){ S=defState(); try{localStorage.removeItem(KEY);}catch(e){} go('set'); }); }},['Erase all'])
   ]));
   m.appendChild(d);
 }
@@ -386,11 +424,12 @@ function bspPanel(m){
   var c=h('div',{class:'card'}); c.appendChild(h('h2',{},['Betfair SP results']));
   c.appendChild(h('div',{class:'note'},['Loads each runner\u2019s BSP and the winner from Betfair\u2019s published starting price file for the meeting date.']));
   var bt=h('div',{class:'btns'});
-  bt.appendChild(h('button',{class:'btn',onclick:fetchBSP},['Fetch BSPs']));
+  var lk=h('a',{href:csvUrl()||'#',target:'_blank',rel:'noopener',class:'btn',style:'text-decoration:none;display:inline-block'},['Fetch BSPs']);
+  lk.onclick=function(e){ var u=csvUrl(); if(!u){ e.preventDefault(); log('Set the meeting date first (Settings).',true); return; } lk.href=u; log('Opened Betfair\u2019s file for '+u.split('/').pop()+'. Select all, copy, come back and use Paste CSV text.'); };
+  bt.appendChild(lk);
   bt.appendChild(h('button',{class:'btn alt',onclick:function(){ $('#bspPaste').classList.toggle('hide'); }},['Paste CSV text']));
   var fi=h('input',{type:'file',accept:'.csv,text/csv,text/plain',class:'hide',id:'bspFile'}); fi.onchange=function(){ var f=fi.files[0]; if(!f) return; var rd=new FileReader(); rd.onload=function(){ applyCSV(String(rd.result)); }; rd.readAsText(f); };
   bt.appendChild(h('button',{class:'btn alt',onclick:function(){ fi.click(); }},['Choose CSV file'])); bt.appendChild(fi);
-  var lk=h('a',{href:csvUrl()||'#',target:'_blank',rel:'noopener',class:'btn alt',style:'text-decoration:none;display:inline-block'},['Open file in browser']); bt.appendChild(lk);
   c.appendChild(bt);
   var pz=h('div',{id:'bspPaste',class:'hide',style:'margin-top:10px'});
   pz.appendChild(h('textarea',{id:'bspTa',placeholder:'Paste the contents of the Betfair CSV here'}));
@@ -401,8 +440,10 @@ function bspPanel(m){
 }
 function csvUrl(){
   var d=S.meeting.date; if(!/^\d{4}-\d\d-\d\d$/.test(d)) return '';
-  var u=S.settings.csvUrl.replace('{YYYY}',d.slice(0,4)).replace('{MM}',d.slice(5,7)).replace('{DD}',d.slice(8,10));
-  return u;
+  var off=parseInt(S.settings.fileOffset,10); if(!isFinite(off)) off=0;
+  var dt=new Date(Date.UTC(+d.slice(0,4),+d.slice(5,7)-1,+d.slice(8,10)+off));
+  var yy=String(dt.getUTCFullYear()), mm=('0'+(dt.getUTCMonth()+1)).slice(-2), dd=('0'+dt.getUTCDate()).slice(-2);
+  return S.settings.csvUrl.replace('{YYYY}',yy).replace('{MM}',mm).replace('{DD}',dd);
 }
 function log(t,warn){ var l=$('#bspLog'); if(!l) return; l.innerHTML=''; var d=h('div',{class:warn?'warn':''},[t]); d.style.whiteSpace='pre-wrap'; l.appendChild(d); }
 function fetchBSP(){
@@ -414,10 +455,14 @@ function fetchBSP(){
    .catch(function(e){ log('Could not download the file automatically ('+e.message+').\n\nMost likely the browser blocked it (the Betfair site does not allow other pages to read its files) or the file is not published yet.\n\nQuickest fix: tap \u201cOpen file in browser\u201d, select all, copy, come back and use \u201cPaste CSV text\u201d. Or save the file and use \u201cChoose CSV file\u201d.',true); });
 }
 function parseCSV(t){
+  t=String(t).replace(/^\ufeff/,'');
+  var first=t.split(/\r?\n/).filter(function(l){return l.trim()!=='';})[0]||'';
+  var cm=(first.match(/,/g)||[]).length, tb=(first.match(/\t/g)||[]).length, sc=(first.match(/;/g)||[]).length;
+  var D=(tb>cm&&tb>=sc)?'\t':((sc>cm)?';':',');
   var rows=[],row=[],f='',q=false;
   for(var i=0;i<t.length;i++){ var ch=t[i];
     if(q){ if(ch==='"'){ if(t[i+1]==='"'){f+='"';i++;} else q=false; } else f+=ch; }
-    else if(ch==='"') q=true; else if(ch===','){ row.push(f); f=''; }
+    else if(ch==='"') q=true; else if(ch===D){ row.push(f); f=''; }
     else if(ch==='\n'||ch==='\r'){ if(ch==='\r'&&t[i+1]==='\n') i++; row.push(f); f=''; if(row.length>1||row[0]!=='') rows.push(row); row=[]; }
     else f+=ch; }
   if(f!==''||row.length){ row.push(f); rows.push(row); }
@@ -426,9 +471,15 @@ function parseCSV(t){
 function norm(s){ return String(s).toLowerCase().replace(/\([^)]*\)/g,'').replace(/[^a-z0-9]/g,''); }
 function applyCSV(text){
   var rows=parseCSV(text); if(rows.length<2){ log('No data found in that text.',true); return; }
-  var hd=rows[0].map(function(x){return x.trim().toLowerCase();});
-  var ix={ hint:hd.indexOf('menu_hint'), ev:hd.indexOf('event_name'), sel:hd.indexOf('selection_name'), wl:hd.indexOf('win_lose'), bsp:hd.indexOf('bsp') };
-  if(ix.ev<0||ix.sel<0||ix.bsp<0){ log('This does not look like a Betfair BSP file (missing EVENT_NAME / SELECTION_NAME / BSP columns).',true); return; }
+  function lc(r){ return r.map(function(x){return String(x).trim().toLowerCase().replace(/[^a-z0-9_]/g,'_');}); }
+  function find(hd,names){ for(var k=0;k<names.length;k++){ var p=hd.indexOf(names[k]); if(p>=0) return p; } return -1; }
+  var hi=-1, ix=null;
+  for(var q=0;q<Math.min(rows.length,40);q++){
+    var hd=lc(rows[q]); var c={ hint:find(hd,['menu_hint','track','venue','meeting']), ev:find(hd,['event_name','market_name','race','event']), sel:find(hd,['selection_name','runner_name','selection','runner','horse']), wl:find(hd,['win_lose','result','win_loss','outcome']), bsp:find(hd,['bsp','betfair_sp','betfair_starting_price','sp']) };
+    if(c.ev>=0&&c.sel>=0&&c.bsp>=0){ hi=q; ix=c; break; }
+  }
+  if(hi<0){ var seen=rows[0].slice(0,12).join(' | ').slice(0,300); log('This does not look like a Betfair BSP file: I could not find EVENT_NAME / SELECTION_NAME / BSP columns.\n\nFirst line I saw ('+rows[0].length+' columns):\n'+seen,true); return; }
+  rows=rows.slice(hi);
   var trk=norm(S.meeting.track), used=0, unmatched=[], races={}, wins={}, seenTrack=false;
   for(var i=1;i<rows.length;i++){
     var r=rows[i]; if(trk && ix.hint>=0 && norm(r[ix.hint]).indexOf(trk)<0) continue; seenTrack=true;
@@ -437,8 +488,9 @@ function applyCSV(text){
     var race=S.races[rn], hit=null, key=norm(nm);
     for(var k=0;k<race.runners.length;k++){ if(norm(race.runners[k].name)===key){ hit=race.runners[k]; break; } }
     if(!hit&&tab!=null) for(var k2=0;k2<race.runners.length;k2++){ if(race.runners[k2].tab===tab){ hit=race.runners[k2]; break; } }
-    var b=parseFloat(r[ix.bsp]), won=ix.wl>=0 && String(r[ix.wl]).trim()==='1';
+    var b=parseFloat(r[ix.bsp]), won=ix.wl>=0 && /^(1|win|winner|won)$/i.test(String(r[ix.wl]).trim());
     if(!hit){ if(isFinite(b)&&b>0) unmatched.push('R'+(rn+1)+' '+tab+'. '+nm); continue; }
+    if(isScr(hit)) continue;
     races[rn]=(races[rn]||0)+1;
     if(isFinite(b)&&b>0){ hit.bsp=String(Math.round(b*100)/100); used++; }
     if(won){ race.runners.forEach(function(x){x.won=false;}); hit.won=true; wins[rn]=true; }
