@@ -77,7 +77,8 @@ textarea{min-height:110px;font-size:13px;font-family:ui-monospace,Menlo,monospac
 .bl{display:flex;justify-content:space-between;padding:7px 0;border-top:1px solid var(--line);font-variant-numeric:tabular-nums}
 .bl:first-of-type{border-top:0}
 .bl{gap:8px;font-size:14.5px}
-.bl>span:first-child{flex:1;min-width:0}
+.bl>span:first-child{flex:1;min-width:0;display:flex;gap:5px}
+.bl .tn{flex:0 0 auto;min-width:1.6em}
 .bl .s{font-weight:750;text-align:right;white-space:nowrap}
 .bl>span:last-child{margin-left:12px;text-align:right;white-space:nowrap}
 .hide{display:none}
@@ -364,7 +365,7 @@ function viewBets(m){
     card.onclick=function(){ go('r'+i); };
     rows.forEach(function(p){
       var st=''; if(r.mode==='FINAL'&&isFinite(num(p.x.bsp))) st=p.o.qual?'  \u2713':'  \u2717';
-      card.appendChild(h('div',{class:'bl'},[h('span',{},[p.x.tab+'. '+p.x.name]),h('span',{class:'s'},['Stake  '+money(p.o.stake)]),h('span',{},['Min Odds '+fmtP(p.o.price)+st])]));
+      card.appendChild(h('div',{class:'bl'},[h('span',{},[h('span',{class:'tn'},[p.x.tab+'.']),h('span',{},[p.x.name])]),h('span',{class:'s'},['Stake  '+money(p.o.stake)]),h('span',{},['Min Odds '+fmtP(p.o.price)+st])]));
     });
     if(hid) card.appendChild(h('div',{class:'note',style:'margin-top:6px'},['+ '+hid+' more bet(s) not shown (Main chances setting)']));
     m.appendChild(card);
