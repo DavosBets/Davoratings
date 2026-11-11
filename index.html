@@ -320,7 +320,7 @@ function viewRace(m,idx){
     var sb=h('button',{class:'scrb'+(isScr(r)?' on':'')},['SCR']);
     sb.onclick=function(){ if(isScr(r)){ r.rating=r.prev||''; } else { r.prev=r.rating; r.rating='scr'; if(r.won) r.won=false; } rI.value=r.rating; sb.className='scrb'+(isScr(r)?' on':''); save(); upd(idx); };
     rI.addEventListener('input',function(){ sb.className='scrb'+(isScr(r)?' on':''); });
-    var l1=h('label',{},['Rating']); l1.appendChild(rI); var l2=h('label',{class:'bspl'},['Betfair SP']); l2.appendChild(bI);
+    var l1=h('label',{},['Davo Rating']); l1.appendChild(rI); var l2=h('label',{class:'bspl'},['Betfair SP']); l2.appendChild(bI);
     row.appendChild(h('div',{class:'ins'},[l1,l2,sb,wb]));
     row.appendChild(h('div',{class:'bet',id:'bt'+i}));
     m.appendChild(row);
@@ -334,7 +334,7 @@ function upd(idx){
     var o=c.rows[i], row=$('#rn'+i); if(!row) return;
     var pr=$('#pr'+i), bt=$('#bt'+i);
     row.classList.toggle('scr',isScr(r)); 
-    pr.innerHTML = o.price==null ? '' : (o.price>=1000?'<span style="color:var(--mute)">1000</span>':fmtP(o.price))+'<small>DAVO</small>';
+    pr.innerHTML = o.price==null ? '' : (o.price>=1000?'<span style="color:var(--mute)">1000</span>':fmtP(o.price))+'<small>DAVO PRICE</small>';
     var txt='', has=false;
     if(o.price!=null && o.price<=100){
       if(o.skip){ txt='No bet: stake under '+money(S.settings.minBet/2); }
