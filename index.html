@@ -107,6 +107,9 @@ textarea{min-height:110px;font-size:13px;font-family:ui-monospace,Menlo,monospac
 .kp .st{background:var(--card);border:1px solid var(--line)}
 .legal{font-size:11.5px;color:var(--mute);text-align:center;line-height:1.5;padding:4px 8px}
 .legal a{color:inherit;font-weight:650}
+.dly{font-size:12px;color:var(--mute);margin-top:4px}
+.dly.ok{color:var(--good);font-weight:600}
+.rn.scr .dly{display:none}
 </style>
 </head>
 <body>
@@ -129,7 +132,8 @@ function defState(){
     settings:{market:80,account:1000,div:30,sd:6,comm:8,
       csvUrl:'https://promo.betfair.com/betfairsp/prices/dwbfpricesauswin{DD}{MM}{YYYY}.csv',
       fileOffset:1,
-      proxy:'',top:'ALL',ticks:true,minBet:1,autoFinal:true},
+      proxy:'',top:'ALL',ticks:true,minBet:1,autoFinal:true,
+      apiKey:'',apiToken:'',apiBase:'https://api.betfair.com.au/exchange/betting/rest/v1.0/',ssoBase:'https://identitysso.betfair.com.au/api/login'},
     races:blankRaces()};
 }
 var S = defState(), view = 'home';
@@ -318,6 +322,7 @@ function viewSummary(m){
   m.appendChild(ip);
 
   bspPanel(m);
+  apiPanel(m);
 }
 function field(label,val,onchg,dec){
   var i=h('input',{value:val,inputmode:dec?'decimal':'text'}); i.oninput=function(){ onchg(i.value); };
@@ -380,6 +385,7 @@ function viewRace(m,idx){
     var l1=h('label',{},['Davo Rating']); l1.appendChild(rI); var l2=h('label',{class:'bspl'},['Betfair SP']); l2.appendChild(bI);
     row.appendChild(h('div',{class:'ins'},[l1,l2,sb,wb]));
     row.appendChild(h('div',{class:'bet',id:'bt'+i}));
+    row.appendChild(h('div',{class:'dly',id:'dl'+i}));
     m.appendChild(row);
   });
   m.appendChild(h('div',{class:'note'},['Ratings: type a number, or tap SCR for a scratching (tap again to undo). Runners with no rating are left out of the price (as in the spreadsheet).']));
@@ -402,6 +408,13 @@ function upd(idx){
       } else txt='Waiting for BSP (stake would be '+money(o.stake)+')';
     }
     row.classList.toggle('hasbet',has); bt.textContent=txt;
+    var dl=$('#dl'+i); if(dl){ var t2='', okp=false;
+      if(r.dly&&!isScr(r)&&(r.dly.back||r.dly.last)){
+        var at=race.dlyAt?new Date(race.dlyAt).toLocaleTimeString('en-AU',{hour:'numeric',minute:'2-digit'}):'';
+        t2='Betfair delayed'+(at?' ('+at+')':'')+': '+(r.dly.back?'back '+fmtP(r.dly.back):'')+((r.dly.back&&r.dly.last)?' \u00b7 ':'')+(r.dly.last?'last '+fmtP(r.dly.last):'');
+        if(o.price!=null&&o.price<=100&&r.dly.back){ okp=r.dly.back>=o.price; t2+=okp?'  \u2713 at or above your min odds':'  (below your min odds)'; }
+      }
+      dl.textContent=t2; dl.className='dly'+(okp?' ok':''); }
   });
   var t=$('#tot');
   t.innerHTML='<div><div class="l">Outlay</div><div class="v">'+c.outlay.toFixed(2)+'</div></div><div><div class="l">Return</div><div class="v">'+c.ret.toFixed(2)+'</div></div><div><div class="l">Comm</div><div class="v">'+c.comm.toFixed(2)+'</div></div><div><div class="l">Profit</div><div class="v '+cls(c.profit)+'">'+c.profit.toFixed(2)+'</div></div>'+(race.mode==='INTERIM'?'<div><div class="l">Mode</div><div class="v">INTERIM</div></div>':'');
@@ -466,15 +479,28 @@ function viewSettings(m){
   cb.appendChild(ck); cb.appendChild(document.createTextNode('Switch a race to FINAL once its winner is loaded')); b.appendChild(cb);
   m.appendChild(b);
 
+  var ap=h('div',{class:'card'}); ap.appendChild(h('h2',{},['Betfair API (delayed key)']));
+  ap.appendChild(h('div',{class:'note'},['Your key and session token are stored only on this device and are left out of backups. Delayed prices are 1\u2013180 seconds behind the live market.']));
+  ap.appendChild(field('App key (delayed)',S.settings.apiKey,function(v){ S.settings.apiKey=v.trim(); save(); }));
+  ap.appendChild(field('Session token (filled in by Log in, or paste one)',S.settings.apiToken,function(v){ S.settings.apiToken=v.trim(); save(); }));
+  var lu=h('input',{type:'text',autocomplete:'username',autocapitalize:'off',placeholder:'Betfair username'}), lp=h('input',{type:'password',autocomplete:'current-password',placeholder:'Password (not saved)'});
+  var l1=h('label',{class:'f'},['Betfair username']); l1.appendChild(lu); var l2=h('label',{class:'f'},['Password (used once, never stored; add your authentication code to the end if you use 2-step login)']); l2.appendChild(lp);
+  ap.appendChild(l1); ap.appendChild(l2);
+  ap.appendChild(h('div',{class:'btns'},[h('button',{class:'btn',onclick:function(){ apiLogin(lu.value,lp.value,function(){ lp.value=''; }); }},['Log in to Betfair'])]));
+  ap.appendChild(h('div',{class:'log',id:'apiLogS'}));
+  ap.appendChild(field('API address',S.settings.apiBase,function(v){ S.settings.apiBase=v.trim(); save(); }));
+  ap.appendChild(field('Login address',S.settings.ssoBase,function(v){ S.settings.ssoBase=v.trim(); save(); }));
+  m.appendChild(ap);
+
   var d=h('div',{class:'card'}); d.appendChild(h('h2',{},['Backup']));
   var ta=h('textarea',{id:'bk',placeholder:'Tap Export, copy the text somewhere safe (Notes). To restore, paste it here and tap Import.'});
   d.appendChild(ta);
   d.appendChild(h('div',{class:'btns'},[
-    h('button',{class:'btn alt',onclick:function(){ ta.value=JSON.stringify(S); ta.select(); try{ document.execCommand('copy'); }catch(e){} }},['Export all (copies)']),
+    h('button',{class:'btn alt',onclick:function(){ ta.value=JSON.stringify(exportState()); ta.select(); try{ document.execCommand('copy'); }catch(e){} }},['Export all (copies)']),
     h('button',{class:'btn alt',onclick:function(){ var o={type:'ratings',meeting:S.meeting,races:S.races.map(function(r){ return {title:r.title,runners:r.runners.map(function(x){ return {tab:x.tab,name:x.name,rating:x.rating}; })}; })}; ta.value=JSON.stringify(o); ta.select(); try{ document.execCommand('copy'); }catch(e){} }},['Export ratings only']),
     h('button',{class:'btn alt',onclick:function(){ try{ var o=JSON.parse(ta.value); if(!o.races||o.races.length!==NR) throw 0;
       if(o.type==='ratings'){ ask('Load these ratings? This replaces the meeting and all races here. Your account and settings are kept.',function(){ S.meeting=o.meeting||{track:'',date:''}; S.races=o.races.map(function(r){ return {title:r.title||'',mode:'INTERIM',runners:(r.runners||[]).slice(0,MAXRUN).map(function(x){ return {tab:x.tab,name:x.name,rating:x.rating==null?'':String(x.rating),bsp:'',won:false}; })}; }); save(); go('sum'); }); return; }
-      S=o; S.settings=Object.assign(defState().settings,S.settings); save(); go('sum'); }catch(e){ say('That text is not a valid backup.'); } }},['Import']),
+      var kk=S.settings.apiKey, kt=S.settings.apiToken; S=o; S.settings=Object.assign(defState().settings,S.settings); S.settings.apiKey=kk||''; S.settings.apiToken=kt||''; save(); go('sum'); }catch(e){ say('That text is not a valid backup.'); } }},['Import']),
     h('button',{class:'btn red',onclick:function(){ ask('Erase everything stored in this app?',function(){ S=defState(); try{localStorage.removeItem(KEY);}catch(e){} go('set'); }); }},['Erase all'])
   ]));
   m.appendChild(d);
@@ -565,6 +591,110 @@ function applyCSV(text){
   log(msg, unmatched.length>0);
   setTimeout(function(){ if(view==='sum'){ var m=$('#main'); var lg=$('#bspLog').textContent; render(); log(lg, unmatched.length>0); } },50);
 }
+
+
+/* ============ Betfair API (delayed key) ============ */
+function apiBase(){ var b=(S.settings.apiBase||'').trim(); if(b&&b.slice(-1)!=='/') b+='/'; return b; }
+function apiLog(msg,warn){ ['apiLog','apiLogS'].forEach(function(id){ var l=document.getElementById(id); if(!l) return; l.innerHTML=''; var d=h('div',{class:warn?'warn':''},[msg]); d.style.whiteSpace='pre-wrap'; l.appendChild(d); }); }
+function apiCall(op,body){
+  var key=(S.settings.apiKey||'').trim(), tok=(S.settings.apiToken||'').trim();
+  if(!key) return Promise.reject({msg:'Enter your Betfair app key in Settings first.'});
+  if(!tok) return Promise.reject({msg:'No session token yet. Use Log in to Betfair in Settings first.'});
+  return fetch(apiBase()+op+'/',{method:'POST',headers:{'Accept':'application/json','Content-Type':'application/json','X-Application':key,'X-Authentication':tok},body:JSON.stringify(body)})
+    .then(function(r){ return r.text().then(function(txt){ var j=null; try{ j=JSON.parse(txt); }catch(e){}
+        if(r.ok) return j;
+        var code=''; try{ code=j.detail.APINGException.errorCode; }catch(e){} if(!code&&j&&j.faultstring) code=j.faultstring;
+        throw {code:code||('HTTP '+r.status)}; }); },
+      function(){ throw {net:true}; });
+}
+function apiErr(e){
+  if(e&&e.msg) return e.msg;
+  if(e&&e.net) return 'The browser could not reach Betfair. Either you are offline, the address is wrong, or Betfair does not allow web pages to call its API (the browser blocks it). In that case use the CSV route (Fetch BSPs / Paste CSV text).';
+  var c=(e&&e.code)||'unknown';
+  if(/SESSION|NO_SESSION/i.test(c)) return 'Betfair rejected the session token ('+c+'). Log in again in Settings.';
+  if(/APP_KEY/i.test(c)) return 'Betfair rejected the app key ('+c+'). Check it in Settings.';
+  return 'Betfair returned an error: '+c+'\nIf this keeps happening, try the other API address (api.betfair.com instead of api.betfair.com.au) in Settings.';
+}
+function apiLogin(user,pass,done){
+  var key=(S.settings.apiKey||'').trim();
+  if(!key){ apiLog('Enter your Betfair app key first.',true); return; }
+  if(!user||!pass){ apiLog('Enter your Betfair username and password.',true); return; }
+  apiLog('Logging in ...');
+  fetch((S.settings.ssoBase||'').trim(),{method:'POST',headers:{'Accept':'application/json','X-Application':key,'Content-Type':'application/x-www-form-urlencoded'},body:'username='+encodeURIComponent(user)+'&password='+encodeURIComponent(pass)})
+    .then(function(r){ return r.json(); },function(){ throw {net:true}; })
+    .then(function(j){
+      if(j&&j.status==='SUCCESS'&&j.token){ S.settings.apiToken=j.token; save(); if(done) done(); apiLog('Logged in. The session token has been saved on this device. It expires after a while, so log in again if Betfair rejects it.'); renderKeepSettings(); }
+      else { apiLog('Betfair did not log you in: '+((j&&(j.error||j.status))||'unknown reason')+'.',true); }
+    })
+    .catch(function(e){ apiLog(e&&e.net?apiErr(e):'Login failed.',true); });
+}
+function renderKeepSettings(){ if(view==='set'){ var y=window.scrollY, lg=(document.getElementById('apiLogS')||{}).textContent||''; render(); window.scrollTo(0,y); apiLog(lg); } }
+function melTime(iso){ try{ return new Date(iso).toLocaleTimeString('en-AU',{timeZone:'Australia/Melbourne',hour:'numeric',minute:'2-digit',hour12:true}).replace(/\s/g,'').toLowerCase(); }catch(e){ return ''; } }
+function apiRaces(){
+  var d=S.meeting.date, trk=S.meeting.track;
+  if(!trk||!/^\d{4}-\d\d-\d\d$/.test(d)){ apiLog('Set the track and date first (Settings).',true); return; }
+  var y=+d.slice(0,4), mo=+d.slice(5,7), dd=+d.slice(8,10);
+  var from=new Date(Date.UTC(y,mo-1,dd-1,12,0,0)).toISOString(), to=new Date(Date.UTC(y,mo-1,dd,15,0,0)).toISOString();
+  apiLog('Asking Betfair for '+trk+' races ...');
+  apiCall('listMarketCatalogue',{filter:{eventTypeIds:['7'],marketCountries:['AU'],marketTypeCodes:['WIN'],venues:[trk],marketStartTime:{from:from,to:to}},marketProjection:['RUNNER_DESCRIPTION','MARKET_START_TIME','EVENT'],sort:'FIRST_TO_START',maxResults:'50'})
+  .then(function(ms){
+    if(!ms||!ms.length){ apiLog('Betfair has no win markets for “'+trk+'” on '+d+'. Check the track spelling and date in Settings.',true); return; }
+    var nr=0, created=0, linked=0, other=0;
+    ms.forEach(function(m){
+      var mm=String(m.marketName||'').match(/^R(\d+)\b\s*(.*)$/i); if(!mm){ other++; return; }
+      var n=parseInt(mm[1],10); if(n<1||n>NR){ other++; return; }
+      var race=S.races[n-1]; race.marketId=m.marketId; race.title=(melTime(m.marketStartTime)+' R'+n+' '+mm[2]).trim(); nr++;
+      (m.runners||[]).forEach(function(x){
+        var rm=String(x.runnerName||'').match(/^(\d+)\.\s*(.*)$/), tab=rm?parseInt(rm[1],10):(x.sortPriority||0), nm=(rm?rm[2]:String(x.runnerName||'')).toUpperCase().trim();
+        var hit=null; race.runners.forEach(function(r){ if(!hit&&(r.tab===tab||norm(r.name)===norm(nm))) hit=r; });
+        if(hit){ hit.sel=x.selectionId; linked++; }
+        else if(race.runners.length<MAXRUN){ race.runners.push({tab:tab,name:nm,rating:'',bsp:'',won:false,sel:x.selectionId}); created++; }
+      });
+      race.runners.sort(function(a,b){return a.tab-b.tab;});
+    });
+    save(); renderNav();
+    var msg='Loaded '+nr+' race(s) for '+trk+': names/times filled in, '+created+' runner(s) added, '+linked+' matched to runners you already had.'+(other?'\n'+other+' other market(s) ignored.':'');
+    if(view==='sum'||view==='set'){ render(); } apiLog(msg);
+  }).catch(function(e){ apiLog(apiErr(e),true); });
+}
+function apiUpdate(){
+  var ids=[], byRace={};
+  S.races.forEach(function(r,i){ if(r.marketId&&r.runners.length){ ids.push(r.marketId); byRace[r.marketId]=i; } });
+  if(!ids.length){ apiLog('No races are linked to Betfair yet. Tap “Load races” first.',true); return; }
+  apiLog('Asking Betfair for prices and results ...');
+  var chunks=[]; for(var i=0;i<ids.length;i+=10) chunks.push(ids.slice(i,i+10));
+  Promise.all(chunks.map(function(c){ return apiCall('listMarketBook',{marketIds:c,priceProjection:{priceData:['EX_BEST_OFFERS','SP_AVAILABLE']}}); }))
+  .then(function(parts){
+    var books=[].concat.apply([],parts), nb=0, wins=[], scr=0, nd=0, fin=[];
+    books.forEach(function(bk){
+      var idx=byRace[bk.marketId]; if(idx==null) return; var race=S.races[idx], map={};
+      (bk.runners||[]).forEach(function(x){ map[x.selectionId]=x; });
+      var closed=bk.status==='CLOSED', won=false;
+      race.runners.forEach(function(r){
+        var x=r.sel!=null?map[r.sel]:null; if(!x) return;
+        if(x.status==='REMOVED'){ if(!isScr(r)){ r.prev=r.rating; r.rating='scr'; scr++; } r.dly=null; return; }
+        var back=(x.ex&&x.ex.availableToBack&&x.ex.availableToBack[0])?x.ex.availableToBack[0].price:null;
+        r.dly=closed?null:{back:back,last:x.lastPriceTraded||null}; if(r.dly&&(r.dly.back||r.dly.last)) nd++;
+        var sp=x.sp&&parseFloat(x.sp.actualSP); if(isFinite(sp)&&sp>1&&sp<1001){ r.bsp=String(Math.round(sp*100)/100); nb++; }
+        if(x.status==='WINNER'){ race.runners.forEach(function(z){z.won=false;}); r.won=true; won=true; }
+      });
+      race.dlyAt=Date.now();
+      if(won){ wins.push(idx+1); if(S.settings.autoFinal){ race.mode='FINAL'; fin.push(idx+1); } }
+    });
+    save(); renderNav();
+    var msg='Updated '+books.length+' race(s): '+nb+' BSP(s), winners in '+(wins.length?'R'+wins.join(', R'):'no races yet')+', '+scr+' newly scratched, delayed prices for '+nd+' runner(s).';
+    if(fin.length) msg+='\nSwitched to FINAL: R'+fin.join(', R')+'.';
+    if(view==='sum'||view.charAt(0)==='r'){ var y=window.scrollY; render(); window.scrollTo(0,y); } apiLog(msg);
+  }).catch(function(e){ apiLog(apiErr(e),true); });
+}
+function apiPanel(m){
+  var c=h('div',{class:'card'}); c.appendChild(h('h2',{},['Betfair API (delayed)']));
+  c.appendChild(h('div',{class:'note'},['Fills in race names and runners, then pulls BSPs, winners, scratchings and delayed prices. Set your key and log in under Settings first.']));
+  c.appendChild(h('div',{class:'btns'},[h('button',{class:'btn',onclick:apiRaces},['Load races']),h('button',{class:'btn',onclick:apiUpdate},['Update prices & results'])]));
+  c.appendChild(h('div',{class:'log',id:'apiLog'}));
+  m.appendChild(c);
+}
+function exportState(){ var o=JSON.parse(JSON.stringify(S)); delete o.settings.apiKey; delete o.settings.apiToken; return o; }
 
 /* ============ boot ============ */
 if(!load()){ if(SAMPLE){ S.meeting={track:SAMPLE.track,date:SAMPLE.date}; S.races=JSON.parse(JSON.stringify(SAMPLE.races)); S.settings.market=80; } }
