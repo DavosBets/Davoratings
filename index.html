@@ -133,7 +133,7 @@ function defState(){
       csvUrl:'https://promo.betfair.com/betfairsp/prices/dwbfpricesauswin{DD}{MM}{YYYY}.csv',
       fileOffset:1,
       proxy:'',top:'ALL',ticks:true,minBet:1,autoFinal:true,
-      apiKey:'',apiToken:'',apiBase:'https://api.betfair.com.au/exchange/betting/rest/v1.0/',ssoBase:'https://identitysso.betfair.com.au/api/login'},
+      apiKey:'',apiToken:'',apiBase:'https://api.betfair.com.au/exchange/betting/rest/v1.0/',ssoBase:'https://identitysso.betfair.com.au/api/login',relay:''},
     races:blankRaces()};
 }
 var S = defState(), view = 'home';
@@ -488,6 +488,7 @@ function viewSettings(m){
   ap.appendChild(l1); ap.appendChild(l2);
   ap.appendChild(h('div',{class:'btns'},[h('button',{class:'btn',onclick:function(){ apiLogin(lu.value,lp.value,function(){ lp.value=''; }); }},['Log in to Betfair'])]));
   ap.appendChild(h('div',{class:'log',id:'apiLogS'}));
+  ap.appendChild(field('Relay address (your Cloudflare worker; leave empty to connect directly)',S.settings.relay,function(v){ S.settings.relay=v.trim(); save(); }));
   ap.appendChild(field('API address',S.settings.apiBase,function(v){ S.settings.apiBase=v.trim(); save(); }));
   ap.appendChild(field('Login address',S.settings.ssoBase,function(v){ S.settings.ssoBase=v.trim(); save(); }));
   m.appendChild(ap);
@@ -594,13 +595,19 @@ function applyCSV(text){
 
 
 /* ============ Betfair API (delayed key) ============ */
+function viaRelay(u){
+  var r=String(S.settings.relay||'').trim().replace(/\/+$/,''); if(!r) return u;
+  var map=[['https://api.betfair.com.au/','/api-au/'],['https://api.betfair.com/','/api/'],['https://identitysso.betfair.com.au/','/sso-au/'],['https://identitysso.betfair.com/','/sso/']];
+  for(var i=0;i<map.length;i++){ if(u.indexOf(map[i][0])===0) return r+map[i][1]+u.slice(map[i][0].length); }
+  return u;
+}
 function apiBase(){ var b=(S.settings.apiBase||'').trim(); if(b&&b.slice(-1)!=='/') b+='/'; return b; }
 function apiLog(msg,warn){ ['apiLog','apiLogS'].forEach(function(id){ var l=document.getElementById(id); if(!l) return; l.innerHTML=''; var d=h('div',{class:warn?'warn':''},[msg]); d.style.whiteSpace='pre-wrap'; l.appendChild(d); }); }
 function apiCall(op,body){
   var key=(S.settings.apiKey||'').trim(), tok=(S.settings.apiToken||'').trim();
   if(!key) return Promise.reject({msg:'Enter your Betfair app key in Settings first.'});
   if(!tok) return Promise.reject({msg:'No session token yet. Use Log in to Betfair in Settings first.'});
-  return fetch(apiBase()+op+'/',{method:'POST',headers:{'Accept':'application/json','Content-Type':'application/json','X-Application':key,'X-Authentication':tok},body:JSON.stringify(body)})
+  return fetch(viaRelay(apiBase()+op+'/'),{method:'POST',headers:{'Accept':'application/json','Content-Type':'application/json','X-Application':key,'X-Authentication':tok},body:JSON.stringify(body)})
     .then(function(r){ return r.text().then(function(txt){ var j=null; try{ j=JSON.parse(txt); }catch(e){}
         if(r.ok) return j;
         var code=''; try{ code=j.detail.APINGException.errorCode; }catch(e){} if(!code&&j&&j.faultstring) code=j.faultstring;
@@ -609,8 +616,10 @@ function apiCall(op,body){
 }
 function apiErr(e){
   if(e&&e.msg) return e.msg;
-  if(e&&e.net) return 'The browser could not reach Betfair. Either you are offline, the address is wrong, or Betfair does not allow web pages to call its API (the browser blocks it). In that case use the CSV route (Fetch BSPs / Paste CSV text).';
+  if(e&&e.net) return (S.settings.relay?'The browser could not reach your relay. Check the relay address in Settings and that you are online.':'The browser could not reach Betfair. Either you are offline, or Betfair does not allow web pages to call its API (the browser blocks it). Set up the relay address in Settings, or use the CSV route (Fetch BSPs / Paste CSV text).');
   var c=(e&&e.code)||'unknown';
+  if(c==='HTTP 403') return 'The relay refused the request (403). The relay only accepts your page\u2019s own address, so check the address inside the relay script.';
+  if(c==='HTTP 502') return 'The relay could not reach Betfair (502). Betfair may be blocking it, or may be down.';
   if(/SESSION|NO_SESSION/i.test(c)) return 'Betfair rejected the session token ('+c+'). Log in again in Settings.';
   if(/APP_KEY/i.test(c)) return 'Betfair rejected the app key ('+c+'). Check it in Settings.';
   return 'Betfair returned an error: '+c+'\nIf this keeps happening, try the other API address (api.betfair.com instead of api.betfair.com.au) in Settings.';
@@ -620,7 +629,7 @@ function apiLogin(user,pass,done){
   if(!key){ apiLog('Enter your Betfair app key first.',true); return; }
   if(!user||!pass){ apiLog('Enter your Betfair username and password.',true); return; }
   apiLog('Logging in ...');
-  fetch((S.settings.ssoBase||'').trim(),{method:'POST',headers:{'Accept':'application/json','X-Application':key,'Content-Type':'application/x-www-form-urlencoded'},body:'username='+encodeURIComponent(user)+'&password='+encodeURIComponent(pass)})
+  fetch(viaRelay((S.settings.ssoBase||'').trim()),{method:'POST',headers:{'Accept':'application/json','X-Application':key,'Content-Type':'application/x-www-form-urlencoded'},body:'username='+encodeURIComponent(user)+'&password='+encodeURIComponent(pass)})
     .then(function(r){ return r.json(); },function(){ throw {net:true}; })
     .then(function(j){
       if(j&&j.status==='SUCCESS'&&j.token){ S.settings.apiToken=j.token; save(); if(done) done(); apiLog('Logged in. The session token has been saved on this device. It expires after a while, so log in again if Betfair rejects it.'); renderKeepSettings(); }
